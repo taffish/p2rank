@@ -1,0 +1,97 @@
+name: Build container image
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Read taffish.toml
+        id: taffish
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          from pathlib import Path
+
+          data = tomllib.loads(Path("taffish.toml").read_text())
+          container = data.get("container", {})
+          image = container.get("image")
+          dockerfile = container.get("dockerfile", "docker/Dockerfile")
+          build_platforms = container.get("build_platforms",
+                                          container.get("platforms",
+                                                        "linux/amd64,linux/arm64"))
+          if not image:
+              raise SystemExit("missing [container].image in taffish.toml")
+          print(f"image={image}")
+          print(f"dockerfile={dockerfile}")
+          print(f"build_platforms={build_platforms}")
+          print(f"amd64_image={image}-amd64")
+          print(f"arm64_image={image}-arm64")
+          PY
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push amd64 image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.taffish.outputs.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.taffish.outputs.amd64_image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=TAFFISH app container image
+
+      - name: Build and push arm64 image
+        id: build_arm64
+        if: contains(steps.taffish.outputs.build_platforms, 'linux/arm64')
+        continue-on-error: true
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ steps.taffish.outputs.dockerfile }}
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.taffish.outputs.arm64_image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description=TAFFISH app container image
+
+      - name: Publish final image manifest
+        run: |
+          images="${{ steps.taffish.outputs.amd64_image }}"
+          if [ "${{ steps.build_arm64.outcome }}" = "success" ]; then
+            images="$images ${{ steps.taffish.outputs.arm64_image }}"
+          else
+            echo "arm64 build did not succeed; publishing amd64-only manifest."
+          fi
+          docker buildx imagetools create \
+            -t "${{ steps.taffish.outputs.image }}" \
+            $images
+
+      - name: GHCR visibility note
+        run: |
+          echo "::notice title=GHCR visibility::GHCR packages are private by default. If this image should be public, open the package settings on GitHub Packages and change visibility to Public. GitHub does not provide a stable Docker-push switch for this, and public packages cannot be made private again."

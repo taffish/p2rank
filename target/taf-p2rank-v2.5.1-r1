@@ -1,0 +1,178 @@
+#!/bin/sh
+
+set -u
+
+script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd) || exit 1
+snapshot_root="$script_dir/.taf-p2rank-v2.5.1-r1"
+taf_main="$snapshot_root/src/main.taf"
+taf_help="$snapshot_root/docs/help.md"
+taffish_bin="${TAFFISH:-taffish}"
+taf_history_mode="${TAF_HISTORY_MODE:-async}"
+taf_history_home="${TAFFISH_USER_HOME:-${HOME:-}/.local/share/taffish}"
+taf_history_file="${TAF_HISTORY_FILE:-$taf_history_home/logs/history.jsonl}"
+
+artifact_name='taf-p2rank-v2.5.1-r1'
+project_name='p2rank'
+project_kind='TOOL'
+project_version='2.5.1'
+project_release='1'
+project_command='taf-p2rank'
+project_repository_url='https://github.com/taffish/p2rank'
+project_container_image='ghcr.io/taffish/p2rank:2.5.1-r1'
+taf_launcher_name="${TAF_LAUNCHER_NAME:-$artifact_name}"
+taf_launcher_artifact="${TAF_LAUNCHER_ARTIFACT:-$artifact_name}"
+
+taf_json_escape() {
+    printf '%s' "$1" | awk '
+        BEGIN {
+            ORS = ""
+            tab = sprintf("%c", 9)
+            cr = sprintf("%c", 13)
+        }
+        {
+            gsub(/\\/, "\\\\")
+            gsub(/"/, "\\\"")
+            gsub(tab, "\\t")
+            gsub(cr, "\\r")
+            if (NR > 1) {
+                printf "\\n"
+            }
+            printf "%s", $0
+        }
+    '
+}
+
+taf_json_string() {
+    printf '"%s"' "$(taf_json_escape "$1")"
+}
+
+taf_json_nullable_string() {
+    if [ -n "$1" ]; then
+        taf_json_string "$1"
+    else
+        printf 'null'
+    fi
+}
+
+taf_history_args_json() {
+    taf_first=1
+    printf '['
+    for taf_arg do
+        if [ "$taf_first" = 1 ]; then
+            taf_first=0
+        else
+            printf ','
+        fi
+        taf_json_string "$taf_arg"
+    done
+    printf ']'
+}
+
+taf_record_history_call() {
+    taf_status="$1"
+    taf_exit="$2"
+    taf_stage="$3"
+    shift 3
+
+    if [ -z "$taf_history_file" ]; then
+        return 0
+    fi
+
+    taf_history_dir=$(dirname "$taf_history_file") || return 0
+    mkdir -p "$taf_history_dir" 2>/dev/null || return 0
+
+    taf_time=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%SZ')
+    taf_id="$(date -u '+%Y%m%dT%H%M%S' 2>/dev/null || date '+%Y%m%dT%H%M%S')-$$"
+    taf_cwd=$(pwd)
+    taf_args_json=$(taf_history_args_json "$@")
+
+    {
+        printf '{'
+        printf '"id":'; taf_json_string "$taf_id"; printf ','
+        printf '"time":'; taf_json_string "$taf_time"; printf ','
+        printf '"event":"exec",'
+        printf '"status":'; taf_json_string "$taf_status"; printf ','
+        printf '"command":'; taf_json_string "$artifact_name"; printf ','
+        printf '"args":%s,' "$taf_args_json"
+        printf '"cwd":'; taf_json_string "$taf_cwd"; printf ','
+        printf '"exit_code":%s,' "$taf_exit"
+        printf '"project_name":'; taf_json_string "$project_name"; printf ','
+        printf '"project_kind":'; taf_json_string "$project_kind"; printf ','
+        printf '"project_version":'; taf_json_string "$project_version"; printf ','
+        printf '"project_release":'; taf_json_string "$project_release"; printf ','
+        printf '"project_command":'; taf_json_string "$project_command"; printf ','
+        printf '"project_root":'; taf_json_string "$snapshot_root"; printf ','
+        printf '"project_main":'; taf_json_string "$taf_main"; printf ','
+        printf '"repository_url":'; taf_json_nullable_string "$project_repository_url"; printf ','
+        printf '"container_image":'; taf_json_nullable_string "$project_container_image"; printf ','
+        printf '"stage":'; taf_json_string "$taf_stage"; printf ','
+        printf '"snapshot_root":'; taf_json_string "$snapshot_root"; printf ','
+        printf '"history_backend":"shell-wrapper"'
+        printf '}\n'
+    } >> "$taf_history_file" 2>/dev/null || true
+}
+
+taf_record_history() {
+    if [ "$taf_history_mode" = "off" ] || [ "$taf_history_mode" = "0" ]; then
+        return 0
+    fi
+    if [ "$taf_history_mode" = "sync" ]; then
+        taf_record_history_call "$@"
+    else
+        taf_record_history_call "$@" &
+    fi
+}
+
+if [ "${1:-}" = "--" ]; then
+    shift
+elif [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+    if [ "$taf_launcher_name" != "$taf_launcher_artifact" ]; then
+        printf '%s -> %s\n' "$taf_launcher_name" "$taf_launcher_artifact"
+    else
+        printf '%s\n' "$taf_launcher_artifact"
+    fi
+    printf 'package: %s\n' "$project_name"
+    printf 'version: %s-r%s\n' "$project_version" "$project_release"
+    printf 'kind: %s\n' "$project_kind"
+    printf 'repository: %s\n' "$project_repository_url"
+    exit 0
+elif [ "${1:-}" = "--compile" ]; then
+    shift
+    exec "$taffish_bin" "$taf_main" "$@"
+elif [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    if [ -f "$taf_help" ]; then
+        cat "$taf_help"
+        exit 0
+    fi
+    echo "help file not found: $taf_help" >&2
+    exit 1
+fi
+
+taf_tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/taffish.XXXXXX") || exit 1
+trap 'rm -rf "$taf_tmpdir"' EXIT INT TERM HUP
+
+taf_shell="$taf_tmpdir/taf.sh"
+"$taffish_bin" "$taf_main" "$@" > "$taf_shell"
+taf_exit=$?
+if [ "$taf_exit" -ne 0 ]; then
+    taf_record_history failure "$taf_exit" compile "$@"
+    exit "$taf_exit"
+fi
+
+chmod +x "$taf_shell"
+taf_exit=$?
+if [ "$taf_exit" -ne 0 ]; then
+    taf_record_history failure "$taf_exit" chmod "$@"
+    exit "$taf_exit"
+fi
+
+"$taf_shell"
+taf_exit=$?
+
+if [ "$taf_exit" -eq 0 ]; then
+    taf_record_history success "$taf_exit" run "$@"
+else
+    taf_record_history failure "$taf_exit" run "$@"
+fi
+
+exit "$taf_exit"

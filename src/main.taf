@@ -1,0 +1,2 @@
+<taf-app:container:ghcr.io/taffish/p2rank:2.5.1-r1$@[docker/podman: --platform linux/amd64]>
+prank ::*ARGV*::
