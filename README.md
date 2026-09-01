@@ -7,52 +7,66 @@ Package identity:
 - name: `p2rank`
 - command: `taf-p2rank`
 - kind: `tool`
-- version: `2.5.1-r1`
+- version: `2.5.1-r2`
 - license: Apache-2.0
 - upstream: <https://github.com/rdk/p2rank>
 
 ## What This App Packages
 
-P2Rank is a standalone command-line program for fast prediction of protein
-ligand-binding sites from PDB, mmCIF, binary CIF, and compressed structure
-files. The packaged upstream command is `prank`.
+P2Rank is a command-line program for predicting protein ligand-binding sites
+from PDB, mmCIF, BinaryCIF, and compressed structure files. The default
+upstream command is `prank`.
 
-This app uses the upstream binary release `p2rank_2.5.1.tar.gz`, OpenJDK 17,
-the upstream models/configuration/test data, and a bundled `fpocket` 4.2.3
-helper so that `prank fpocket-rescore ...` works inside the same container.
+The image contains the upstream P2Rank 2.5.1 binary release, OpenJDK 17, all
+models and configuration profiles shipped in that release, and Fpocket 4.2.3
+for the upstream `prank fpocket-rescore` workflow.
+
+## Same-Upstream Backend Repair
+
+Release `2.5.1-r2` is a same-upstream successor to the immutable
+`2.5.1-r1` release. In a read-only Apptainer SIF, BioJava rejected
+`/opt/p2rank/cache` because the image root was not writable, silently changed
+its cache root to `/tmp`, and then tried to download common chemical
+components. The old prediction smoke also lacked fail-fast shell semantics, so
+a missing output could be hidden by its final cleanup command.
+
+The r2 launcher now copies the 56 reduced BioJava definitions from the
+read-only image into a unique writable directory under `/tmp`, sets both the
+environment variables and Java system properties to that directory, and then
+executes the unmodified upstream launcher. The smoke paths now preserve command
+status, assert non-empty outputs, reject download errors, and replay bounded
+logs on failure.
 
 ## Scope
 
 This app supports:
 
-- `prank predict` for P2Rank pocket prediction on individual structure files or
-  dataset files.
-- `prank rescore` and `prank fpocket-rescore` for rescoring precomputed or
-  Fpocket-generated pockets.
-- `prank eval-predict` and `prank eval-rescore` for upstream evaluation
-  workflows on datasets with known ligands.
-- Upstream P2Rank models and configuration profiles, including `default`,
-  `alphafold`, `default_rescore`, `rescore_2024`, and conservation-oriented
-  profiles.
+- `prank predict` on individual structures and P2Rank dataset files.
+- `prank rescore`, `fpocket-rescore`, `eval-predict`, and
+  `eval-rescore`.
+- The upstream `default`, `alphafold`, `default_rescore`,
+  `rescore_2024`, and conservation-oriented profiles.
+- Optional persistence of BioJava's on-demand chemical-component cache through
+  an app-managed host bind.
 
 This app does not:
 
-- Include PyMOL or ChimeraX. P2Rank can generate `.pml` and `.cxc`
-  visualization scripts, but viewing them requires external desktop software.
-- Provide a web server. PrankWeb is separate from this command-line runtime.
-- Bundle the full RCSB chemical component dictionary. A reduced BioJava
-  chemcomp cache is preloaded for common residues and the smoke-tested paths;
-  unusual ligands may use BioJava fallback behavior or a user-provided cache.
+- Package a desktop viewer. PyMOL and ChimeraX are optional upstream viewers
+  for generated `.pml` and `.cxc` scripts.
+- Package PrankWeb; that is a separate companion web service.
+- Package P2Rank's source-training environment or provide a general interface
+  for project-specific trained models.
+- Replace the dedicated full `taf-fpocket` app.
 
 ## Container Contents
 
-- `prank`: P2Rank 2.5.1 command-line entry point.
-- `fpocket`: Fpocket 4.2.3 helper used by `prank fpocket-rescore`.
-- OpenJDK 17 runtime.
-- `/opt/p2rank/models`, `/opt/p2rank/config`, and `/opt/p2rank/test_data` from
-  the upstream P2Rank release.
-- `/opt/p2rank/cache/chemcomp`: reduced BioJava chemical component cache
-  extracted from the bundled BioJava jar.
+- `prank`: app launcher followed by the unmodified P2Rank 2.5.1 launcher.
+- `fpocket`: Fpocket 4.2.3 helper for `prank fpocket-rescore`.
+- `java`: OpenJDK 17 runtime.
+- `/opt/p2rank/models`: six upstream model directories plus score transforms.
+- `/opt/p2rank/config`: upstream configuration profiles.
+- `/opt/p2rank/cache/chemcomp`: 56 read-only reduced BioJava definitions.
+- `taffish-p2rank-smoke`: packaging smoke helper used by the Index contract.
 
 ## Usage
 
@@ -69,132 +83,182 @@ Predict pockets for one structure:
 taf-p2rank predict -f protein.pdb -threads 4 -visualizations 0 -o p2rank_out
 ```
 
-Predict with a P2Rank dataset file:
+Use the AlphaFold profile:
 
 ```sh
-taf-p2rank predict proteins.ds -threads 4 -o p2rank_dataset_out
+taf-p2rank predict -f alphafold_model.cif -c alphafold -o alphafold_out
 ```
 
-Use another upstream configuration:
-
-```sh
-taf-p2rank predict -f alphafold_model.cif -c alphafold -o alphafold_p2rank_out
-```
-
-Rescore existing Fpocket predictions:
-
-```sh
-taf-p2rank rescore fpocket.ds -o p2rank_rescore_out
-```
-
-Run Fpocket and rescore in one command:
+Run Fpocket and rescore its pockets:
 
 ```sh
 taf-p2rank fpocket-rescore proteins.ds -fpocket_keep_output 0 -o fpocket_rescore_out
 ```
 
+## Backend Usage and Capability Matrix
+
+| Capability | Docker | Podman | Apptainer | Validation and boundary |
+| --- | --- | --- | --- | --- |
+| Standard CLI and bundled models | `TAFFISH_CONTAINER_BACKEND=docker taf-p2rank predict ...` | `TAFFISH_CONTAINER_BACKEND=podman taf-p2rank predict ...` | `TAFFISH_CONTAINER_BACKEND=apptainer taf-p2rank predict ...` | Exact normal and read-only-root smoke passed for r2. |
+| Optional writable chemcomp cache | `TAFFISH_P2RANK_CHEMCOMP_CACHE_PATH=/absolute/cache TAFFISH_CONTAINER_BACKEND=docker taf-p2rank ...` | Same with `podman` | Same with `apptainer` | `src/main.taf` emits an actual read-write bind to `/p2rank-cache`; the path must already exist and be writable. |
+| `linux/amd64` image | Native on amd64; app-encoded emulation on arm64 | Native on amd64; app-encoded emulation on arm64 | Native amd64 host required | Fpocket is the architecture-limiting component. Use Docker or Podman emulation on an arm64 host. |
+| Writable executable temporary space | Standard container `/tmp` | Standard container `/tmp` | Standard SIF `/tmp` | Required for the chemcomp working copy and Java zstd native extraction; a site `noexec` policy on `/tmp` is incompatible. |
+
+The Docker/Podman `--platform linux/amd64` requirement is encoded in
+`src/main.taf`; users should not repeat it in global run arguments.
+
 ## Command Mode
 
-`taf-p2rank` defaults to `prank`, so `taf-p2rank predict ...` runs
-`prank predict ...` inside the container. Automatic command mode is also
-enabled for helper inspection, for example `taf-p2rank fpocket` prints the
-bundled helper's usage text. The packaged Fpocket binary is present to support
-P2Rank's `fpocket-rescore` workflow, not to replace the dedicated
-`taf-fpocket` app.
+`taf-p2rank` defaults to `prank`, so `taf-p2rank predict ...` runs the
+upstream prediction command. Automatic command mode remains available for
+packaged executables.
 
-Use `taf-p2rank -- -v` for option-leading arguments to the default `prank`
-command. Use `taf-p2rank prank help` or `taf-p2rank -- help` for upstream help.
+Use `taf-p2rank -- -v` for an option-leading argument to the default command.
+Use `taf-p2rank prank help` for explicit upstream help. The `--` separator
+does not turn a P2Rank subcommand into a wrapper option.
 
 ## Inputs
 
 | Input | Meaning | Notes |
 | --- | --- | --- |
-| PDB/mmCIF/BCIF structure | Protein structure for prediction | P2Rank also accepts `.gz` and `.zst` examples from upstream. |
-| P2Rank dataset file | Text file listing structures or prediction/protein pairs | See upstream `doc/dataset-file-format.md`. |
-| Fpocket output | Pocket predictions for `prank rescore` | `prank fpocket-rescore` can generate these automatically with bundled `fpocket`. |
+| PDB/mmCIF/BCIF structure | Protein structure for prediction | `.gz` and `.zst` compressed inputs are supported upstream. |
+| P2Rank dataset file | List of structures or prediction/protein pairs | See the upstream dataset-file-format manual. |
+| Fpocket predictions | Existing pockets for rescoring | `fpocket-rescore` can create them with the bundled helper. |
+| Custom config | P2Rank parameter overrides | Pass a file with `-c path/to/config.groovy`. |
 
 ## Output Notes
 
-For prediction, P2Rank writes files such as:
+Prediction writes `*_predictions.csv` and `*_residues.csv`. Rescoring
+writes `*_rescored.csv` and prediction-compatible pocket tables. Unless
+`-visualizations 0` is used, P2Rank also writes visualization scripts and SAS
+point data.
 
-- `{struct_file}_predictions.csv`: predicted pockets, scores, centers,
-  adjacent residues/atoms, and probabilities.
-- `{struct_file}_residues.csv`: residue-level scores and pocket assignments.
-- Optional visualization scripts and SAS point data when visualizations are
-  enabled.
-
-For rescoring, P2Rank writes files such as `{struct_file}_rescored.csv` and, for
-`fpocket-rescore`, `predictions.csv` style outputs that can often replace direct
-`predict` output in downstream workflows.
+P2Rank writes to the `-o` directory. Keep that directory in the wrapper's
+bound working directory so the result persists on the host.
 
 ## Resources, Databases, and Platform
 
-P2Rank models are bundled in the upstream release and no template database is
-required for normal prediction. BioJava may consult chemical component
-definitions while parsing structures; this image preloads the reduced
-definitions included with upstream BioJava and sets `PDB_CACHE_DIR` and
-`PDB_DIR` to `/opt/p2rank/cache`.
+### Bundled models
 
-For unusual ligands not present in the reduced cache, users can provide a
-writable cache by mounting a directory and setting `PDB_CACHE_DIR`, for example:
+The upstream release asset contains all six model directories used by the
+packaged profiles. They occupy about 199 MiB and are covered by the pinned
+P2Rank release SHA256. They are immutable image content, require no runtime
+download, and need no host model mount. Training outputs are project-specific
+inputs and are outside this runtime app's supported surface.
+
+### Chemical-component definitions
+
+Normal offline prediction uses 56 reduced definitions extracted from the
+pinned BioJava jar. The image copy stays read-only; every `prank` process
+seeds a unique writable runtime cache under `/tmp`.
+
+BioJava can request additional RCSB component definitions for uncommon input.
+Those individual files are an optional mutable convenience cache, not a fixed
+P2Rank model or a release-pinned production database. To persist them, create
+an empty writable directory and set the app-specific host path:
 
 ```sh
-TAFFISH_DOCKER_RUN_ARGS="-v $PWD/p2rank-cache:/data/p2rank-cache -e PDB_CACHE_DIR=/data/p2rank-cache" \
-  taf-p2rank predict -f protein_with_custom_ligand.pdb -o out
+mkdir -p "$HOME/.cache/taffish/p2rank/chemcomp/2.5.1"
+TAFFISH_P2RANK_CHEMCOMP_CACHE_PATH="$HOME/.cache/taffish/p2rank/chemcomp/2.5.1" \
+  taf-p2rank predict -f protein_with_ligand.pdb -o out
 ```
 
-This app is built for `linux/amd64`. P2Rank itself is Java-based, but the
-bundled `fpocket` helper uses upstream Linux amd64 plugin assets, so the
-published image is intentionally not declared as native `linux/arm64`.
-`src/main.taf` declares Docker/Podman `--platform linux/amd64`, so arm64 hosts
-can use backend emulation without setting that option manually.
+The app validates the host directory and binds it read-write at
+`/p2rank-cache` on Docker, Podman, and Apptainer. Missing reduced definitions
+are copied without overwriting existing files. Additional definitions may be
+downloaded only if the selected backend permits network access and BioJava
+actually requests them. There is no bulk app downloader: upstream BioJava
+2.5.1's integration resolves individual components lazily and exposes no fixed
+P2Rank cache bundle. For a reproducible project, preserve and checksum the
+resulting directory or run offline with only the bundled definitions.
+
+Paths containing whitespace, commas, colons, or glob characters are rejected
+because they cannot be represented safely and consistently by all three
+backend bind syntaxes.
+
+### Runtime write map
+
+| Path | Writer | Lifetime |
+| --- | --- | --- |
+| `/tmp/taffish-p2rank-chemcomp.*` | launcher/BioJava | Per container when no persistent cache is selected |
+| Backend `/tmp` | Java native extraction and smoke scratch | Per container |
+| Wrapper working directory / `-o` | P2Rank and Fpocket | Host-persistent project output |
+| `/p2rank-cache` | BioJava | Optional actual host bind selected by `TAFFISH_P2RANK_CHEMCOMP_CACHE_PATH` |
+
+No runtime path writes to `/opt`, `/usr`, or another image-root directory.
+
+## GUI and Companion Boundary
+
+Official P2Rank documents optional PyMOL and ChimeraX viewers and the separate
+PrankWeb companion. This app generates the upstream visualization scripts but
+does not start a GUI, browser service, VNC/noVNC session, port, or long-running
+helper. The GUI/service rules are therefore not part of this CLI release's
+runtime surface; open generated scripts in a separately installed viewer, or
+use PrankWeb independently.
 
 ## Boundaries
 
-The image includes Fpocket only as a helper for P2Rank's upstream
-`fpocket-rescore` command. It does not package or test the full Fpocket suite.
-For full Fpocket, mdpocket, dpocket, or tpocket workflows, use the dedicated
-`taf-fpocket` app.
+The bundled Fpocket binary exists to satisfy P2Rank's documented
+`fpocket-rescore` subprocess. Use `taf-fpocket` for the full Fpocket suite.
 
-If `fpocket-rescore` is used in scientific work, cite Fpocket as well as
-P2Rank, following upstream guidance.
-
-Upstream tracking is marked manual because the upstream tag space includes
-development and alpha tags in addition to stable GitHub Releases. This package
-uses the stable P2Rank 2.5.1 release asset and records the exact upstream
-commit and SHA256 in `taffish.toml` and `release.md`.
+The image is declared only for `linux/amd64`. Docker and Podman arm64 hosts
+can use the app-encoded amd64 emulation. Apptainer does not provide that
+emulation contract, so an arm64 Apptainer host should use Docker/Podman instead.
 
 ## Troubleshooting
 
-- If upstream help exits with a nonzero status, that is P2Rank's normal `prank
-  help` behavior; the text is still printed.
-- If BioJava reports missing chemical component definitions for unusual
-  ligands, provide or mount a writable `PDB_CACHE_DIR`, or use structures where
-  such ligand details are not needed for the intended prediction workflow.
-- For Apple Silicon or other arm64 hosts, Docker/Podman should use amd64
-  emulation through the platform option embedded in `src/main.taf`.
+- `PDB_CACHE_DIR is not a writable directory`: use the app-specific
+  `TAFFISH_P2RANK_CHEMCOMP_CACHE_PATH` host variable and an existing writable
+  directory; do not point Java directly at the read-only image cache.
+- `Could not download ... chemcomp`: normal common-residue parsing should not
+  emit this. For an uncommon ligand, allow network for one run with a persistent
+  cache, or preserve the required definition before an offline run.
+- Native library extraction failure under `/tmp`: remove a site `noexec`
+  policy for this container or provide a backend configuration with writable,
+  executable container temporary space.
+- On arm64, use Docker or Podman so the app-encoded amd64 platform emulation is
+  applied.
 
 ## Testing
 
-The smoke test covers:
+Candidate image identity:
 
-- wrapper metadata and upstream version identity
-- presence of `prank`, Java, and bundled `fpocket`
-- model/config/test-data availability
-- a minimal offline `prank predict` path on a stripped PDB fixture
-- a minimal offline `prank fpocket-rescore` path with bundled Fpocket
-- dynamic-library completeness for Fpocket
+- `sha256:f50e1b469729566e70eab05ecf868ce529ef8979eeeffe5bb170941982d5fdd0`
+- `linux/amd64`, 657,689,342 bytes
+- P2Rank content: about 293 MiB, including about 199 MiB models and 69 MiB jars
+- OpenJDK runtime: about 184 MiB
+- Fpocket runtime: about 1.8 MiB
+- the initial 308 MB recursive-permission duplicate layer was removed before
+  final validation
 
-It does not validate full Fpocket workflows, and it does not replace full
-scientific validation on production structures or large benchmark datasets.
+Exact direct-smoke status for the final candidate:
+
+- Docker: 8/8 `exist` and 5/5 `test` PASS in normal containers; the same
+  13/13 PASS in read-only-root, non-root proxies with only executable
+  `/tmp` writable.
+- Podman 5.2.5: the same normal and read-only-root matrices PASS.
+- Apptainer 1.4.2: an actual SIF built from the same final OCI content passed
+  all 8 `exist` and 5 `test` commands in separate clean, contained,
+  network-isolated executions.
+- Real `taf-p2rank` wrapper cache binds were exercised for Docker, Podman, and
+  Apptainer; each actual host directory received all 56 bundled definitions,
+  including `chemcomp/PHE.cif.gz`. Podman and Apptainer wrapper prediction and
+  `fpocket-rescore` paths also completed successfully.
+- `taf publish --build --release --dry-run` completed with the remote checked:
+  the latest published release is still `v2.5.1-r1`, while the r2 tag and
+  GitHub Release are absent as expected.
+- Approved backend exception: none.
+
+The smoke covers release identity, help, Fpocket linkage, offline prediction,
+prediction outputs, and `fpocket-rescore`. It does not replace scientific
+validation on production structures.
 
 ## License and Citation
 
 TAFFISH app packaging: Apache-2.0.
 
-P2Rank is distributed under the MIT License. This image also bundles Fpocket
-4.2.3 as an MIT-licensed helper with its upstream Qhull notice retained under
-`/opt/fpocket/share/licenses/fpocket`.
+P2Rank is MIT-licensed. Fpocket 4.2.3 is MIT-licensed, and the Qhull notice is
+retained in the image.
 
 Primary P2Rank citation:
 
@@ -202,8 +266,5 @@ Krivak R, Hoksza D. P2Rank: machine learning based tool for rapid and accurate
 prediction of ligand binding sites from protein structure. Journal of
 Cheminformatics. 2018;10:39. <https://doi.org/10.1186/s13321-018-0285-8>
 
-Fpocket citation for `fpocket-rescore` workflows:
-
-Le Guilloux V, Schmidtke P, Tuffery P. Fpocket: an open source platform for
-ligand pocket detection. BMC Bioinformatics. 2009;10:168.
-<https://doi.org/10.1186/1471-2105-10-168>
+When using `fpocket-rescore`, also cite Fpocket according to its upstream
+guidance.

@@ -46,7 +46,8 @@ RUN set -eux; \
         echo "sha256=${FPOCKET_SHA256}"; \
         echo "upstream_commit=4bb0d8447f62fee77e2c3c29f54b5fcaf5e2c066"; \
         echo "build_arch=LINUXAMD64"; \
-    } > /opt/fpocket/share/doc/fpocket/source.txt
+    } > /opt/fpocket/share/doc/fpocket/source.txt; \
+    chmod -R a+rX /opt/fpocket
 
 FROM debian:12-slim AS p2rank-fetcher
 
@@ -87,9 +88,11 @@ RUN set -eux; \
         echo "sha256=${P2RANK_SHA256}"; \
         echo "upstream_commit=9808a7723be9a94e2ffc21ab5f724cb6ae4ba01e"; \
         echo "java=17-24 supported by upstream; packaged runtime uses OpenJDK 17"; \
-        echo "chemcomp_cache=preloaded from bundled BioJava reduced definitions"; \
+        echo "chemcomp_cache=56 reduced definitions extracted from bundled BioJava"; \
+        echo "runtime_write_map=launcher seeds a writable per-run cache under /tmp"; \
         echo "bundled_helper=fpocket 4.2.3 for prank fpocket-rescore"; \
-    } > /opt/p2rank/source.txt
+    } > /opt/p2rank/source.txt; \
+    chmod -R a+rX /opt/p2rank
 
 FROM debian:12-slim
 
@@ -122,23 +125,20 @@ RUN set -eux; \
 COPY --from=p2rank-fetcher /opt/p2rank /opt/p2rank
 COPY --from=fpocket-builder /opt/fpocket /opt/fpocket
 COPY --from=fpocket-builder /opt/fpocket/bin/fpocket /usr/local/bin/fpocket
+COPY docker/prank-wrapper.sh /usr/local/bin/prank
+COPY docker/p2rank-smoke.sh /usr/local/bin/taffish-p2rank-smoke
 
 RUN set -eux; \
-    printf '%s\n' '#!/usr/bin/env bash' 'exec /opt/p2rank/prank "$@"' > /usr/local/bin/prank; \
-    chmod 0755 /usr/local/bin/prank /usr/local/bin/fpocket; \
-    chmod -R a+rX /opt/p2rank /opt/fpocket; \
-    chmod -R a+rwX /opt/p2rank/cache
+    chmod 0755 /usr/local/bin/prank /usr/local/bin/fpocket /usr/local/bin/taffish-p2rank-smoke
 
 WORKDIR /root
 
-ENV PDB_CACHE_DIR=/opt/p2rank/cache
-ENV PDB_DIR=/opt/p2rank/cache
 ENV JAVA_OPTS=-Djava.awt.headless=true
 ENV TAFFISH_ENV=TAFFISH
 ENV TAFFISH_NAME=p2rank
 
 RUN set -eux; \
-    for cmd in prank java fpocket bash grep sed ldd; do \
+    for cmd in prank java fpocket bash grep sed ldd taffish-p2rank-smoke; do \
         command -v "$cmd" >/dev/null; \
     done; \
     grep -Fx "P2Rank ${P2RANK_VERSION}" /opt/p2rank/source.txt >/dev/null; \
@@ -152,21 +152,8 @@ RUN set -eux; \
     prank -v 2>&1 | grep -F "P2Rank ${P2RANK_VERSION}" >/dev/null; \
     { prank help 2>&1 || true; } | grep -F "predict pockets" >/dev/null; \
     { fpocket 2>&1 || true; } | grep -F "fpocket" >/dev/null; \
-    tmp=/tmp/taf-p2rank-build-check; \
-    rm -rf "$tmp"; \
-    mkdir -p "$tmp"; \
-    grep -v '^HETATM' /opt/p2rank/test_data/1fbl.pdb > "$tmp/1fbl_nohet.pdb"; \
-    prank predict -visualizations 0 -threads 1 -o "$tmp/predict" -f "$tmp/1fbl_nohet.pdb" > "$tmp/predict.log" 2>&1; \
-    test -s "$tmp/predict/1fbl_nohet.pdb_predictions.csv"; \
-    test -s "$tmp/predict/1fbl_nohet.pdb_residues.csv"; \
-    grep -F "pocket1" "$tmp/predict/1fbl_nohet.pdb_predictions.csv" >/dev/null; \
-    if grep -F "Could not download" "$tmp/predict.log"; then exit 1; fi; \
-    printf "HEADER: protein\n1fbl_nohet.pdb\n" > "$tmp/mini.ds"; \
-    prank fpocket-rescore "$tmp/mini.ds" -visualizations 0 -threads 1 -o "$tmp/fpocket_rescore" > "$tmp/fpocket-rescore.log" 2>&1; \
-    test -s "$tmp/fpocket_rescore/1fbl_nohet.pdb_rescored.csv"; \
-    test -s "$tmp/fpocket_rescore/1fbl_nohet.pdb_predictions.csv"; \
-    if grep -F "Could not download" "$tmp/fpocket-rescore.log"; then exit 1; fi; \
-    rm -rf "$tmp"; \
+    taffish-p2rank-smoke predict; \
+    taffish-p2rank-smoke fpocket-rescore; \
     ldd "$(command -v fpocket)" > /tmp/p2rank-fpocket-ldd.txt; \
     if grep -F "not found" /tmp/p2rank-fpocket-ldd.txt; then exit 1; fi; \
     rm -f /tmp/p2rank-fpocket-ldd.txt

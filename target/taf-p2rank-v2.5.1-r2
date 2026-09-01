@@ -3,7 +3,7 @@
 set -u
 
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd) || exit 1
-snapshot_root="$script_dir/.taf-p2rank-v2.5.1-r1"
+snapshot_root="$script_dir/.taf-p2rank-v2.5.1-r2"
 taf_main="$snapshot_root/src/main.taf"
 taf_help="$snapshot_root/docs/help.md"
 taffish_bin="${TAFFISH:-taffish}"
@@ -11,14 +11,14 @@ taf_history_mode="${TAF_HISTORY_MODE:-async}"
 taf_history_home="${TAFFISH_USER_HOME:-${HOME:-}/.local/share/taffish}"
 taf_history_file="${TAF_HISTORY_FILE:-$taf_history_home/logs/history.jsonl}"
 
-artifact_name='taf-p2rank-v2.5.1-r1'
+artifact_name='taf-p2rank-v2.5.1-r2'
 project_name='p2rank'
 project_kind='TOOL'
 project_version='2.5.1'
-project_release='1'
+project_release='2'
 project_command='taf-p2rank'
 project_repository_url='https://github.com/taffish/p2rank'
-project_container_image='ghcr.io/taffish/p2rank:2.5.1-r1'
+project_container_image='ghcr.io/taffish/p2rank:2.5.1-r2'
 taf_launcher_name="${TAF_LAUNCHER_NAME:-$artifact_name}"
 taf_launcher_artifact="${TAF_LAUNCHER_ARTIFACT:-$artifact_name}"
 
@@ -86,7 +86,8 @@ taf_record_history_call() {
     taf_cwd=$(pwd)
     taf_args_json=$(taf_history_args_json "$@")
 
-    {
+    taf_history_record=$(
+      {
         printf '{'
         printf '"id":'; taf_json_string "$taf_id"; printf ','
         printf '"time":'; taf_json_string "$taf_time"; printf ','
@@ -108,8 +109,10 @@ taf_record_history_call() {
         printf '"stage":'; taf_json_string "$taf_stage"; printf ','
         printf '"snapshot_root":'; taf_json_string "$snapshot_root"; printf ','
         printf '"history_backend":"shell-wrapper"'
-        printf '}\n'
-    } >> "$taf_history_file" 2>/dev/null || true
+        printf '}'
+      }
+    ) || return 0
+    printf '%s\n' "$taf_history_record" >> "$taf_history_file" 2>/dev/null || true
 }
 
 taf_record_history() {
