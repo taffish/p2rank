@@ -7,7 +7,7 @@ Package identity:
 - name: `p2rank`
 - command: `taf-p2rank`
 - kind: `tool`
-- version: `2.5.1-r2`
+- version: `2.5.1-r3`
 - license: Apache-2.0
 - upstream: <https://github.com/rdk/p2rank>
 
@@ -23,19 +23,25 @@ for the upstream `prank fpocket-rescore` workflow.
 
 ## Same-Upstream Backend Repair
 
-Release `2.5.1-r2` is a same-upstream successor to the immutable
-`2.5.1-r1` release. In a read-only Apptainer SIF, BioJava rejected
+Release `2.5.1-r3` is a same-upstream successor to the immutable
+`2.5.1-r2` release. Release r2 fixed the original read-only-SIF failure: in
+the r1 image, BioJava rejected
 `/opt/p2rank/cache` because the image root was not writable, silently changed
 its cache root to `/tmp`, and then tried to download common chemical
 components. The old prediction smoke also lacked fail-fast shell semantics, so
 a missing output could be hidden by its final cleanup command.
 
-The r2 launcher now copies the 56 reduced BioJava definitions from the
+The container launcher copies the 56 reduced BioJava definitions from the
 read-only image into a unique writable directory under `/tmp`, sets both the
 environment variables and Java system properties to that directory, and then
 executes the unmodified upstream launcher. The smoke paths now preserve command
 status, assert non-empty outputs, reject download errors, and replay bounded
 logs on failure.
+
+Release r3 replaces r2's invalid-cache sentinel with a host-side wrapper
+preflight. An explicit cache path is checked, physically resolved, and rejected
+with exit 64 before Docker, Podman, or Apptainer starts; valid paths retain the
+same narrow read-write bind and normal execution behavior.
 
 ## Scope
 
@@ -80,38 +86,42 @@ taf-p2rank prank help
 Predict pockets for one structure:
 
 ```sh
-taf-p2rank predict -f protein.pdb -threads 4 -visualizations 0 -o p2rank_out
+taf-p2rank prank predict -f protein.pdb -threads 4 -visualizations 0 -o p2rank_out
 ```
 
 Use the AlphaFold profile:
 
 ```sh
-taf-p2rank predict -f alphafold_model.cif -c alphafold -o alphafold_out
+taf-p2rank prank predict -f alphafold_model.cif -c alphafold -o alphafold_out
 ```
 
 Run Fpocket and rescore its pockets:
 
 ```sh
-taf-p2rank fpocket-rescore proteins.ds -fpocket_keep_output 0 -o fpocket_rescore_out
+taf-p2rank prank fpocket-rescore proteins.ds -fpocket_keep_output 0 -o fpocket_rescore_out
 ```
 
 ## Backend Usage and Capability Matrix
 
 | Capability | Docker | Podman | Apptainer | Validation and boundary |
 | --- | --- | --- | --- | --- |
-| Standard CLI and bundled models | `TAFFISH_CONTAINER_BACKEND=docker taf-p2rank predict ...` | `TAFFISH_CONTAINER_BACKEND=podman taf-p2rank predict ...` | `TAFFISH_CONTAINER_BACKEND=apptainer taf-p2rank predict ...` | Exact normal and read-only-root smoke passed for r2. |
-| Optional writable chemcomp cache | `TAFFISH_P2RANK_CHEMCOMP_CACHE_PATH=/absolute/cache TAFFISH_CONTAINER_BACKEND=docker taf-p2rank ...` | Same with `podman` | Same with `apptainer` | `src/main.taf` emits an actual read-write bind to `/p2rank-cache`; the path must already exist and be writable. |
+| Standard CLI and bundled models | `TAFFISH_CONTAINER_BACKEND=docker taf-p2rank prank predict ...` | `TAFFISH_CONTAINER_BACKEND=podman taf-p2rank prank predict ...` | `TAFFISH_CONTAINER_BACKEND=apptainer taf-p2rank prank predict ...` | Exact normal/read-only-root smoke and native Linux wrapper paths passed for r3. |
+| Optional writable chemcomp cache | `TAFFISH_P2RANK_CHEMCOMP_CACHE_PATH=/absolute/cache TAFFISH_CONTAINER_BACKEND=docker taf-p2rank ...` | Same with `podman` | Same with `apptainer` | `src/main.taf` emits an actual read-write bind to `/p2rank-cache`; the path must already exist and be writable. Docker runs as the invoking host UID/GID so cache files remain user-owned. |
 | `linux/amd64` image | Native on amd64; app-encoded emulation on arm64 | Native on amd64; app-encoded emulation on arm64 | Native amd64 host required | Fpocket is the architecture-limiting component. Use Docker or Podman emulation on an arm64 host. |
 | Writable executable temporary space | Standard container `/tmp` | Standard container `/tmp` | Standard SIF `/tmp` | Required for the chemcomp working copy and Java zstd native extraction; a site `noexec` policy on `/tmp` is incompatible. |
 
 The Docker/Podman `--platform linux/amd64` requirement is encoded in
-`src/main.taf`; users should not repeat it in global run arguments.
+`src/main.taf`; users should not repeat it in global run arguments. Docker also
+runs the container process as the invoking host UID/GID to avoid root-owned
+files in persistent output and cache binds.
 
 ## Command Mode
 
-`taf-p2rank` defaults to `prank`, so `taf-p2rank predict ...` runs the
-upstream prediction command. Automatic command mode remains available for
-packaged executables.
+Automatic command mode remains available for packaged executables, so a
+non-option first token is interpreted as an executable name. Use the explicit
+upstream executable for P2Rank subcommands, for example
+`taf-p2rank prank predict ...`; bare `taf-p2rank predict ...` would look for a
+separate executable named `predict` and is not a supported invocation.
 
 Use `taf-p2rank -- -v` for an option-leading argument to the default command.
 Use `taf-p2rank prank help` for explicit upstream help. The `--` separator
@@ -160,7 +170,7 @@ an empty writable directory and set the app-specific host path:
 ```sh
 mkdir -p "$HOME/.cache/taffish/p2rank/chemcomp/2.5.1"
 TAFFISH_P2RANK_CHEMCOMP_CACHE_PATH="$HOME/.cache/taffish/p2rank/chemcomp/2.5.1" \
-  taf-p2rank predict -f protein_with_ligand.pdb -o out
+  taf-p2rank prank predict -f protein_with_ligand.pdb -o out
 ```
 
 The app validates the host directory and binds it read-write at
@@ -174,7 +184,10 @@ resulting directory or run offline with only the bundled definitions.
 
 Paths containing whitespace, commas, colons, or glob characters are rejected
 because they cannot be represented safely and consistently by all three
-backend bind syntaxes.
+backend bind syntaxes. Missing, non-directory, non-writable, or unsafe paths
+exit from wrapper preflight before a container backend is invoked.
+On Docker, seeded and newly downloaded cache files retain the invoking user's
+UID/GID instead of becoming root-owned host files.
 
 ### Runtime write map
 
@@ -225,28 +238,36 @@ Candidate image identity:
 
 - `sha256:f50e1b469729566e70eab05ecf868ce529ef8979eeeffe5bb170941982d5fdd0`
 - `linux/amd64`, 657,689,342 bytes
+- Docker archive SHA256:
+  `054d33fdfcab88c097db621a90588451607cb17846139c69b3b8278f7a5d3814`
+- actual SIF SHA256:
+  `5ec29a8d2e73d613d683a647d68e7c27be31fa8b93dad2507ddc1c0ab755b24a`
+  (403,353,600 bytes)
 - P2Rank content: about 293 MiB, including about 199 MiB models and 69 MiB jars
 - OpenJDK runtime: about 184 MiB
 - Fpocket runtime: about 1.8 MiB
-- the initial 308 MB recursive-permission duplicate layer was removed before
-  final validation
+- the r3 root-context build reused the fully audited r2 image content; no image
+  layer or Dockerfile changed for this wrapper-only successor
 
 Exact direct-smoke status for the final candidate:
 
-- Docker: 8/8 `exist` and 5/5 `test` PASS in normal containers; the same
-  13/13 PASS in read-only-root, non-root proxies with only executable
-  `/tmp` writable.
-- Podman 5.2.5: the same normal and read-only-root matrices PASS.
-- Apptainer 1.4.2: an actual SIF built from the same final OCI content passed
-  all 8 `exist` and 5 `test` commands in separate clean, contained,
-  network-isolated executions.
-- Real `taf-p2rank` wrapper cache binds were exercised for Docker, Podman, and
-  Apptainer; each actual host directory received all 56 bundled definitions,
-  including `chemcomp/PHE.cif.gz`. Podman and Apptainer wrapper prediction and
-  `fpocket-rescore` paths also completed successfully.
-- `taf publish --build --release --dry-run` completed with the remote checked:
-  the latest published release is still `v2.5.1-r1`, while the r2 tag and
-  GitHub Release are absent as expected.
+- On native `x86_64` Linux as ordinary user `kyhan`, Docker 26.1.5 and Podman
+  5.4.2 each passed normal 13/13 and read-only-root/non-root 13/13 matrices.
+- An actual read-only Apptainer 1.5.3 SIF made from the same checked archive
+  passed 13/13 in separate contained, clean-environment, network-none runs.
+- The same Docker and Podman normal/read-only matrices also passed locally;
+  the native Linux results, not arm64-host emulation, close the platform gate.
+- Final real wrappers passed offline `predict` and `fpocket-rescore` on Docker,
+  Podman, and Apptainer. Each actual host cache received exactly 56 bundled
+  definitions including `chemcomp/PHE.cif.gz`; all final files were owned by
+  the invoking user, and the Podman symlink resolved to its physical target.
+- Missing and unsafe cache paths returned 64 before backend invocation for all
+  three selectors. A fake-backend invocation marker remained absent.
+- The GitHub Action remained byte-identical to a fresh TAFFISH 0.11.0 tool
+  scaffold, SHA256
+  `c1f2fa9d87561bb49447ce346dcb2d4d246fa0b1196d02eca10df6afbe5f12ca`.
+- `taf publish --build --release --dry-run` returned `planned` after checking
+  remote latest `v2.5.1-r2`; the r3 tag and GitHub Release are absent.
 - Approved backend exception: none.
 
 The smoke covers release identity, help, Fpocket linkage, offline prediction,

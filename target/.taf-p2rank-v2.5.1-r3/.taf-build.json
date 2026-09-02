@@ -1,0 +1,6 @@
+{
+  "artifact": "taf-p2rank-v2.5.1-r3",
+  "schema": "taffish.build/v1",
+  "source_sha256": "f3ea0c0a399ca45ff96a028ecf337c3d3878c0793d43d662e33a06d07bcbf633",
+  "wrapper_sha256": "04459e77aeeb3dc7ff45147fb2a1d3bd6a343519b4c3be662c05b78e52ed3b43"
+}

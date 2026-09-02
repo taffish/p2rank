@@ -2,7 +2,7 @@
 name = "p2rank"
 kind = "tool"
 version = "2.5.1"
-release = 2
+release = 3
 license = "Apache-2.0"
 main = "src/main.taf"
 
@@ -17,7 +17,7 @@ pipe = true
 command_mode = true
 
 [container]
-image = "ghcr.io/taffish/p2rank:2.5.1-r2"
+image = "ghcr.io/taffish/p2rank:2.5.1-r3"
 dockerfile = "docker/Dockerfile"
 build_platforms = "linux/amd64"
 

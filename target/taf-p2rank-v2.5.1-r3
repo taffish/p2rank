@@ -3,7 +3,7 @@
 set -u
 
 script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd) || exit 1
-snapshot_root="$script_dir/.taf-p2rank-v2.5.1-r2"
+snapshot_root="$script_dir/.taf-p2rank-v2.5.1-r3"
 taf_main="$snapshot_root/src/main.taf"
 taf_help="$snapshot_root/docs/help.md"
 taffish_bin="${TAFFISH:-taffish}"
@@ -11,14 +11,14 @@ taf_history_mode="${TAF_HISTORY_MODE:-async}"
 taf_history_home="${TAFFISH_USER_HOME:-${HOME:-}/.local/share/taffish}"
 taf_history_file="${TAF_HISTORY_FILE:-$taf_history_home/logs/history.jsonl}"
 
-artifact_name='taf-p2rank-v2.5.1-r2'
+artifact_name='taf-p2rank-v2.5.1-r3'
 project_name='p2rank'
 project_kind='TOOL'
 project_version='2.5.1'
-project_release='2'
+project_release='3'
 project_command='taf-p2rank'
 project_repository_url='https://github.com/taffish/p2rank'
-project_container_image='ghcr.io/taffish/p2rank:2.5.1-r2'
+project_container_image='ghcr.io/taffish/p2rank:2.5.1-r3'
 taf_launcher_name="${TAF_LAUNCHER_NAME:-$artifact_name}"
 taf_launcher_artifact="${TAF_LAUNCHER_ARTIFACT:-$artifact_name}"
 
